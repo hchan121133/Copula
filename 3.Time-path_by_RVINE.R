@@ -1,5 +1,5 @@
 ############################################################
-# FINAL B) Time-path (3*T=60D) "R-VINE" + Simulation
+# FINAL C) Time-path (3*T=60D) "R-VINE" + Simulation
 #
 # - For each group g:
 #   1) Build 60D vector per id: A_inc_1..T, B_inc_1..T, C_inc_1..T
@@ -7,8 +7,8 @@
 #   3) Fit R-vine copula on 60D U (Structure Selection)
 #   4) Simulate 60D paths -> cumulate -> exceed probability
 # - Export:
-#   (1) exceed summary CSV
-#   (2) exceed-by-year CSV
+#   (1) exceed summary CSV (C_exceed...)
+#   (2) exceed-by-year CSV (C_exceed...)
 #   (3) margin fit summary CSV
 #   (4) vine family counts CSV
 # - Includes "How to check structure" section
@@ -27,7 +27,7 @@ suppressPackageStartupMessages({
 options(scipen = 999)
 
 # =========================================================
-# [B-0] USER CONTROLS
+# [C-0] USER CONTROLS
 # =========================================================
 LIMIT <- 10e8
 Tmax  <- 20
@@ -36,12 +36,14 @@ min_pos_n <- 80
 n_sim <- 1000          # ★ 시뮬레이션 횟수 (안정성 위해 1000회 이상 권장)
 
 TRUNC_LEVEL <- 4       # ★ 4단계까지 확장 (A1->A2 연결 강화)
-familyset   <- c(1, 3, 4, 5, 6) # ★ Gaussian, Clayton, Gumbel, Frank, Joe (고액 리스크 집중)
+# 고액 리스크 집중 Family Set
+familyset   <- c(1, 3, 4, 5, 6, 13, 14, 16, 23, 24, 26, 33, 34, 36)
 
+# ★ [수정] 평가 코드(evaluation.R)가 인식할 수 있도록 폴더명 변경
 out_dir3 <- "result_Model3"
 
 # =========================================================
-# [B-1] INPUT CHECK
+# [C-1] INPUT CHECK
 # =========================================================
 stopifnot(exists("cum_df"))
 need_cols <- c("id","g","duration","A_cum","B_cum","C_cum")
@@ -51,7 +53,7 @@ if (!dir.exists(out_dir3)) dir.create(out_dir3, recursive = TRUE)
 stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 
 # =========================================================
-# [B-2] CUM -> INC (long)
+# [C-2] CUM -> INC (long)
 # =========================================================
 inc_long <- cum_df %>%
   dplyr::arrange(id, duration) %>%
@@ -70,7 +72,7 @@ inc_long <- cum_df %>%
   dplyr::select(id, g, duration, A_inc, B_inc, C_inc)
 
 # =========================================================
-# [B-3] HURDLE UTILS (A와 동일)
+# [C-3] HURDLE UTILS (A와 동일)
 # =========================================================
 fit_hurdle_margin <- function(x, min_pos = 80) {
   x <- x[is.finite(x)]
@@ -169,7 +171,7 @@ q_hurdle <- function(u, m) {
 }
 
 # =========================================================
-# [B-4] BUILD 60D WIDE TABLE PER GROUP
+# [C-4] BUILD 60D WIDE TABLE PER GROUP
 # =========================================================
 make_wide_inc <- function(df_g_long, Tmax) {
   wideA <- df_g_long %>%
@@ -203,7 +205,7 @@ make_wide_inc <- function(df_g_long, Tmax) {
 }
 
 # =========================================================
-# [B-5] FIT 60D "R-VINE" PER GROUP (Corrected)
+# [C-5] FIT 60D "R-VINE" PER GROUP
 # =========================================================
 fit_timevine_group_rvine <- function(df_wide, min_pos_n, familyset, trunc_level) {
   
@@ -224,18 +226,17 @@ fit_timevine_group_rvine <- function(df_wide, min_pos_n, familyset, trunc_level)
     U[,j] <- pit_hurdle(X[[j]], margins[[j]])
   }
   
-  # (3) R-vine 자동 구조 탐색 및 적합 (안전 장치 추가)
+  # (3) R-vine 자동 구조 탐색 및 적합
   vine <- NULL
   
-  # 오류가 발생해도 멈추지 않고 NULL을 반환하도록 tryCatch 추가
   vine <- tryCatch({
     RVineStructureSelect(
       data = U,
       familyset = familyset,
-      type = "RVine",        
+      type = 0,              # 0: R-Vine (General)
       selectioncrit = "AIC",
       indeptest = TRUE,
-      level = NA,
+      level = 0.05,
       trunclevel = trunc_level, 
       progress = FALSE,
       method = "mle"
@@ -249,12 +250,11 @@ fit_timevine_group_rvine <- function(df_wide, min_pos_n, familyset, trunc_level)
 }
 
 # =========================================================
-# [B-6] SIMULATE 60D PATHS
+# [C-6] SIMULATE 60D PATHS
 # =========================================================
-simulate_timevine_group_B <- function(gv, mdl, n_sim, Tmax, LIMIT, seed) {
+simulate_timevine_group_C <- function(gv, mdl, n_sim, Tmax, LIMIT, seed) {
   set.seed(seed)
   
-  # [수정] 모델 적합이 실패했으면 NULL 반환
   if(is.null(mdl$vine)) return(NULL)
   
   U_sim <- RVineSim(n_sim, mdl$vine)
@@ -293,20 +293,20 @@ simulate_timevine_group_B <- function(gv, mdl, n_sim, Tmax, LIMIT, seed) {
 }
 
 # =========================================================
-# [B-7] RUN FIT + SIM PER GROUP
+# [C-7] RUN FIT + SIM PER GROUP
 # =========================================================
 groups <- sort(unique(inc_long$g))
 
 handlers(global = TRUE)
 plan(multisession, workers = 2)
 
-model_map_B <- NULL
-sim_res_B <- NULL
+model_map_C <- NULL
+sim_res_C <- NULL
 
 with_progress({
   p <- progressor(along = groups)
   
-  model_map_B <- future_lapply(groups, function(gv) {
+  model_map_C <- future_lapply(groups, function(gv) {
     df_g <- inc_long %>% dplyr::filter(g == gv)
     df_wide <- make_wide_inc(df_g, Tmax = Tmax)
     
@@ -317,46 +317,46 @@ with_progress({
       trunc_level = TRUNC_LEVEL
     )
     
-    p(sprintf("fit B g=%s", gv))
+    p(sprintf("fit C g=%s", gv))
     mdl
   })
   
-  names(model_map_B) <- groups
+  names(model_map_C) <- groups
 })
 
 with_progress({
   p <- progressor(along = groups)
   
-  sim_res_B <- future_lapply(groups, function(gv) {
-    if(is.null(model_map_B[[gv]]$vine)) return(NULL)
+  sim_res_C <- future_lapply(groups, function(gv) {
+    if(is.null(model_map_C[[gv]]$vine)) return(NULL)
     
-    out <- simulate_timevine_group_B(
+    out <- simulate_timevine_group_C(
       gv = gv,
-      mdl = model_map_B[[gv]],
+      mdl = model_map_C[[gv]],
       n_sim = n_sim,
       Tmax = Tmax,
       LIMIT = LIMIT,
       seed = 5000 + match(gv, groups)
     )
-    p(sprintf("sim B g=%s", gv))
+    p(sprintf("sim C g=%s", gv))
     out
   })
 })
 
-# [수정] NULL(실패한 그룹) 제거
-sim_res_B <- sim_res_B[!sapply(sim_res_B, is.null)]
+# NULL(실패한 그룹) 제거
+sim_res_C <- sim_res_C[!sapply(sim_res_C, is.null)]
 
-# [수정] 유효한 결과가 하나도 없는 경우 중단
-if(length(sim_res_B) == 0) {
+# 유효한 결과가 하나도 없는 경우 중단
+if(length(sim_res_C) == 0) {
   stop("모든 그룹에 대한 시뮬레이션이 실패했습니다. 데이터나 파라미터를 확인해주세요.")
 }
 
 # =========================================================
-# [B-8] OUTPUT: EXCEED RESULTS
+# [C-8] OUTPUT: EXCEED RESULTS
 # =========================================================
-B_exceed_summary <- dplyr::bind_rows(lapply(sim_res_B, function(x) {
+C_exceed_summary <- dplyr::bind_rows(lapply(sim_res_C, function(x) {
   tibble(
-    method = "B",
+    method = "C",  # ★ [수정] Method 이름을 C로 설정
     g = x$g,
     n_sim = x$n_sim,
     exceed_prob_any = x$exceed_prob_any,
@@ -366,33 +366,34 @@ B_exceed_summary <- dplyr::bind_rows(lapply(sim_res_B, function(x) {
   )
 })) %>% dplyr::arrange(dplyr::desc(exceed_prob_any))
 
-B_exceed_by_t <- dplyr::bind_rows(lapply(sim_res_B, function(x) {
+C_exceed_by_t <- dplyr::bind_rows(lapply(sim_res_C, function(x) {
   tibble(
-    method = "B",
+    method = "C",  # ★ [수정] Method 이름을 C로 설정
     g = x$g,
     duration = 1:Tmax,
     exceed_prob_t = x$exceed_prob_by_t
   )
 }))
 
-B_exceed_summary_path <- file.path(out_dir3, paste0("B_exceed_summary_", stamp, ".csv"))
-B_exceed_by_t_path    <- file.path(out_dir3, paste0("B_exceed_by_t_", stamp, ".csv"))
+# ★ [수정] 파일명 C_exceed_... 로 변경
+C_exceed_summary_path <- file.path(out_dir3, paste0("C_exceed_summary_", stamp, ".csv"))
+C_exceed_by_t_path    <- file.path(out_dir3, paste0("C_exceed_by_t_", stamp, ".csv"))
 
-write.csv(B_exceed_summary, B_exceed_summary_path, row.names = FALSE)
-write.csv(B_exceed_by_t,    B_exceed_by_t_path,    row.names = FALSE)
+write.csv(C_exceed_summary, C_exceed_summary_path, row.names = FALSE)
+write.csv(C_exceed_by_t,    C_exceed_by_t_path,    row.names = FALSE)
 
-cat("Saved(B) exceed:\n", B_exceed_summary_path, "\n", B_exceed_by_t_path, "\n")
+cat("Saved(C) exceed:\n", C_exceed_summary_path, "\n", C_exceed_by_t_path, "\n")
 
 # =========================================================
-# [B-9] OUTPUT: "MARGIN FIT SUMMARY" CSV (60D)
+# [C-9] OUTPUT: "MARGIN FIT SUMMARY" CSV (60D)
 # =========================================================
-extract_B_margin_summary <- function(model_map_B) {
-  all_g <- names(model_map_B)
+extract_C_margin_summary <- function(model_map_C) {
+  all_g <- names(model_map_C)
   out_list <- list()
   idx <- 1
   
   for (g in all_g) {
-    mdl <- model_map_B[[g]]
+    mdl <- model_map_C[[g]]
     if(is.null(mdl$vine)) next
     
     mlist <- mdl$margins
@@ -409,7 +410,7 @@ extract_B_margin_summary <- function(model_map_B) {
       }
       
       out_list[[idx]] <- data.frame(
-        method = "B",
+        method = "C", # ★ [수정]
         g = g,
         var = v,
         p0 = m$p0,
@@ -424,27 +425,27 @@ extract_B_margin_summary <- function(model_map_B) {
   dplyr::bind_rows(out_list) %>% dplyr::arrange(g, var)
 }
 
-B_margin_tbl <- extract_B_margin_summary(model_map_B)
-B_margin_path <- file.path(out_dir3, paste0("B_margin_fit_summary_", stamp, ".csv"))
-write.csv(B_margin_tbl, B_margin_path, row.names = FALSE)
-cat("Saved(B) margin fit summary:\n", B_margin_path, "\n")
+C_margin_tbl <- extract_C_margin_summary(model_map_C)
+C_margin_path <- file.path(out_dir3, paste0("C_margin_fit_summary_", stamp, ".csv"))
+write.csv(C_margin_tbl, C_margin_path, row.names = FALSE)
+cat("Saved(C) margin fit summary:\n", C_margin_path, "\n")
 
 # =========================================================
-# [B-10] OUTPUT: "VINE FAMILY COUNTS" CSV
+# [C-10] OUTPUT: "VINE FAMILY COUNTS" CSV
 # =========================================================
 family_name <- function(code){
   nm <- VineCopula::BiCopName(code)
   ifelse(is.na(nm), as.character(code), nm)
 }
 
-extract_B_family_counts <- function(model_map_B) {
-  all_g <- names(model_map_B)
+extract_C_family_counts <- function(model_map_C) {
+  all_g <- names(model_map_C)
   out_list <- list()
   idx <- 1
   
   for (g in all_g) {
-    if(is.null(model_map_B[[g]]$vine)) next
-    vine <- model_map_B[[g]]$vine
+    if(is.null(model_map_C[[g]]$vine)) next
+    vine <- model_map_C[[g]]$vine
     
     fam_vec <- as.vector(vine$family)
     fam_vec <- fam_vec[fam_vec != 0]
@@ -453,7 +454,7 @@ extract_B_family_counts <- function(model_map_B) {
     tab <- sort(table(fam_vec), decreasing = TRUE)
     
     out_list[[idx]] <- data.frame(
-      method = "B",
+      method = "C", # ★ [수정]
       g = g,
       family_code = as.integer(names(tab)),
       family_name = family_name(as.integer(names(tab))),
@@ -468,22 +469,22 @@ extract_B_family_counts <- function(model_map_B) {
     dplyr::arrange(g, dplyr::desc(n_edges))
 }
 
-B_family_tbl <- extract_B_family_counts(model_map_B)
-B_family_path <- file.path(out_dir3, paste0("B_vine_family_counts_", stamp, ".csv"))
-write.csv(B_family_tbl, B_family_path, row.names = FALSE)
-cat("Saved(B) vine family counts:\n", B_family_path, "\n")
+C_family_tbl <- extract_C_family_counts(model_map_C)
+C_family_path <- file.path(out_dir3, paste0("C_vine_family_counts_", stamp, ".csv"))
+write.csv(C_family_tbl, C_family_path, row.names = FALSE)
+cat("Saved(C) vine family counts:\n", C_family_path, "\n")
 
 # =========================================================
-# [B-11] "IS IT REALLY R-VINE?" 확인 방법
+# [C-11] "IS IT REALLY R-VINE?" 확인 방법
 # =========================================================
-check_B_rvine <- function(model_map_B, g) {
-  if(is.null(model_map_B[[g]]$vine)) {
+check_C_rvine <- function(model_map_C, g) {
+  if(is.null(model_map_C[[g]]$vine)) {
     cat("Model for group", g, "failed to fit.\n")
     return(NULL)
   }
   
-  vine <- model_map_B[[g]]$vine
-  cat("----- R-vine check (B) -----\n")
+  vine <- model_map_C[[g]]$vine
+  cat("----- R-vine check (C) -----\n")
   cat("g =", g, "\n\n")
   
   cat("[1] vine$Matrix (Structure):\n")
@@ -498,5 +499,5 @@ check_B_rvine <- function(model_map_B, g) {
   invisible(vine)
 }
 
-cat("\nHow to check R-vine for B:\n",
-    "Example: check_B_rvine(model_map_B, g=groups[1])\n")
+cat("\nHow to check R-vine for C:\n",
+    "Example: check_C_rvine(model_map_C, g=groups[1])\n")
